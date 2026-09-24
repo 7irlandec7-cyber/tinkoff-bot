@@ -427,6 +427,13 @@ class ScalpingTrader:
         effective_tp = self.settings.take_profit_percent
         effective_sl = self.settings.stop_loss_percent
 
+        # РЕЖИМ "ПЕРВЫЙ ПЛЮС": позиция закрывается при ПЕРВОМ положительном
+        # PnL ПОСЛЕ комиссии брокера (вход + выход + минимальный профит 0.02%).
+        # TP никогда не опускается ниже уровня безубытка с учётом комиссии.
+        min_breakeven_tp = 2 * self.settings.commission_percent + 0.02
+        if effective_tp < min_breakeven_tp:
+            effective_tp = min_breakeven_tp
+
         # СИНХРОНИЗАЦИЯ ПОЗИЦИЙ С API - критически важно для работы TP/SL
         # Получаем реальные позиции из API и сопоставляем с self.positions
         try:
@@ -620,6 +627,14 @@ class ScalpingTrader:
                 logger.info(f"🚨 TP/SL СРАБОТАЛ для {position.ticker}! {reason}")
                 position.is_closing = True
                 positions_to_close.append((position, current_price, reason))
+
+            # "ПЕРВЫЙ ПЛЮС" — независимая проверка: закрываем сразу, как только
+            # PnL покрыл комиссию (вход+выход) и вышел в минимальный плюс.
+            if not should_close and pnl_check >= effective_tp:
+                reason = f"💰 Первый плюс после комиссии: +{pnl_check:.3f}%"
+                logger.info(f"🚨 {position.ticker}: {reason}")
+                position.is_closing = True
+                positions_to_close.append((position, current_price, reason))
             
             if position.is_closing:
                 continue
@@ -662,8 +677,11 @@ class ScalpingTrader:
         
         position.update_pnl(current_price)
         
-        # TP/SL БЕЗ вычитания комиссии - комиссия учтётся только при закрытии
-        effective_tp = self.settings.take_profit_percent
+        # TP/SL с учётом комиссии: TP не ниже безубытка (вход+выход+0.02%)
+        effective_tp = max(
+            self.settings.take_profit_percent,
+            2 * self.settings.commission_percent + 0.02,
+        )
         effective_sl = self.settings.stop_loss_percent
         
         # Логирование для отладки

@@ -7,13 +7,17 @@ on:
   workflow_dispatch: # можно запустить вручную
 
 env:
+  # РЕЖИМ «БЕСКОНЕЧНЫЕ ОПЕРАЦИИ»: закрытие при первом положительном PnL
+  # после комиссии. Комиссия round-trip = 2×0.04% = 0.08%,
+  # TP = 0.12% (0.08% комиссия + 0.04% чистый профит).
+  # MAX_TRADES=999 = без лимита сделок в день.
   SCALPING_STRATEGY: medium_term
-  SCALPING_TAKE_PROFIT: 1.5
-  SCALPING_STOP_LOSS: 0.7
-  SCALPING_CHECK_INTERVAL: 120
+  SCALPING_TAKE_PROFIT: 0.12
+  SCALPING_STOP_LOSS: 0.3
+  SCALPING_CHECK_INTERVAL: 10
   SCALPING_MAX_POSITIONS: 3
-  SCALPING_MAX_TRADES: 8
-  SCALPING_MIN_HOLD_MINUTES: 30
+  SCALPING_MAX_TRADES: 999
+  SCALPING_MIN_HOLD_MINUTES: 0
   SCALPING_MAX_HOLD_MINUTES: 240
   SCALPING_ALLOW_MARGIN: false
   SCALPING_ALLOW_SHORT: false
