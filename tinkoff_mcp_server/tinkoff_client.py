@@ -176,7 +176,7 @@ class TinkoffClient:
 
         # Цена в формате Units/Nano
         price_units = int(price)
-        price_nano = int((price - price_units) * 1e9)
+        price_nano = int(round((price - price_units) * 1e9))
 
         logger.info(f"LIMIT ORDER: figi={figi}, qty={quantity}, dir={direction}, price={price} -> units={price_units}, nano={price_nano}")
 
@@ -229,7 +229,7 @@ class TinkoffClient:
 
         api_direction = "STOP_ORDER_DIRECTION_BUY" if direction == "BUY" else "STOP_ORDER_DIRECTION_SELL"
         price_units = int(stop_price)
-        price_nano = int((stop_price - price_units) * 1e9)
+        price_nano = int(round((stop_price - price_units) * 1e9))
 
         order_type_label = "TAKE-PROFIT" if "TAKE_PROFIT" in stop_order_type else "STOP-LOSS"
         logger.info(f"EXCHANGE {order_type_label}: figi={figi}, qty={quantity}, dir={direction}, price={stop_price}")
