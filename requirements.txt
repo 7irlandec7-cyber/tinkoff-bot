@@ -1,0 +1,33 @@
+# MCP Server & Client
+fastmcp>=0.1.0
+mcp>=1.0.0
+
+# HTTP Client
+httpx>=0.25.0
+
+# Web Framework (for health endpoints)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+
+# Data validation
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# Logging
+python-json-logger>=2.0.0
+
+# Date/Time
+python-dateutil>=2.8.0
+
+# Async
+aiofiles>=23.0.0
+
+# Testing (optional)
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Telegram Bot
+aiogram>=3.13.0

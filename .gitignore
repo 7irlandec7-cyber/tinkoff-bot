@@ -1,0 +1,39 @@
+# Secrets
+.env
+.env.*
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.egg-info/
+
+# OS
+.DS_Store
+
+# Build
+dist/
+build/
+
+# Promto
+.promto/
+
+# Temp
+/tmp/
+
+# Other projects
+finam_forex_bot/
+telegram_bot/
+Документация/
+Дизайн Примеры/
+proto/
+proto.zip
+
+# Irrelevant
+*.zip
+*.gz
+=*
+Dockerfile
+fly.toml

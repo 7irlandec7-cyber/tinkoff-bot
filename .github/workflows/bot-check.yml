@@ -1,0 +1,45 @@
+name: Tinkoff Bot Check
+
+on:
+  schedule:
+    # Каждые 5 минут, в будни с 7:00 до 16:00 UTC (10:00-19:00 МСК)
+    - cron: '*/5 * * * 1-5'
+  workflow_dispatch:  # можно запустить вручную
+
+env:
+  SCALPING_STRATEGY: medium_term
+  SCALPING_TAKE_PROFIT: 1.5
+  SCALPING_STOP_LOSS: 0.7
+  SCALPING_CHECK_INTERVAL: 120
+  SCALPING_MAX_POSITIONS: 3
+  SCALPING_MAX_TRADES: 8
+  SCALPING_MIN_HOLD_MINUTES: 30
+  SCALPING_MAX_HOLD_MINUTES: 240
+  SCALPING_ALLOW_MARGIN: false
+  SCALPING_ALLOW_SHORT: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt httpx python-dotenv
+
+      - name: Run bot check (one cycle)
+        env:
+          TINKOFF_TOKEN: ${{ secrets.TINKOFF_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python run_scalping_once.py
