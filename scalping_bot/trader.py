@@ -1405,12 +1405,32 @@ class ScalpingTrader:
             
             logger.info(f"Ордер исполнен: {result.get('orderId')}")
 
+            # Извлекаем РЕАЛЬНУЮ цену исполнения из ответа API
+            real_entry = signal.price
+            try:
+                eop = result.get('executedOrderPrice') or {}
+                eop_units = float(eop.get('units', 0) or 0)
+                eop_nano = float(eop.get('nano', 0) or 0) / 1e9
+                total_cost = eop_units + eop_nano
+                lots_exec = int(result.get('lotsExecuted', 0) or 0)
+                if total_cost > 0 and lots_exec > 0:
+                    lot_size = self._get_lot_size(signal.figi)
+                    if lot_size > 0:
+                        real_entry = total_cost / (lots_exec * lot_size)
+                        logger.info(
+                            f"🎯 Реальная цена исполнения {signal.ticker}: {real_entry:.4f}₽ "
+                            f"(сигнал был {signal.price:.4f}₽, total_cost={total_cost:.2f}₽, "
+                            f"lots={lots_exec}, lot_size={lot_size})"
+                        )
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь цену исполнения: {e}")
+
             # Создать позицию ТОЛЬКО после успешного ордера
             new_position = Position(
                 figi=signal.figi,
                 ticker=signal.ticker,
                 direction=signal.signal_type.value,
-                entry_price=signal.price,
+                entry_price=real_entry,
                 quantity=quantity,
                 entry_time=datetime.now(),
                 entry_reason=signal.reason
@@ -1427,7 +1447,7 @@ class ScalpingTrader:
             sl_order_id, sl_price, sl_filled = self._place_exchange_sl_with_retry(
                 figi=signal.figi,
                 quantity=quantity,
-                entry_price=signal.price,
+                entry_price=real_entry,
                 direction=sl_direction,
                 sl_percent=sl_val,
             )
@@ -1469,7 +1489,7 @@ class ScalpingTrader:
                 tp_order_id, tp_price_placed, tp_filled = self._place_exchange_tp_with_retry(
                     figi=signal.figi,
                     quantity=quantity,
-                    entry_price=signal.price,
+                    entry_price=real_entry,
                     direction=tp_direction,
                     tp_percent=tp_val,
                 )
