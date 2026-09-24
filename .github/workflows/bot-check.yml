@@ -3,8 +3,8 @@ name: Tinkoff Bot Check
 on:
   schedule:
     # Каждые 5 минут, в будни с 7:00 до 16:00 UTC (10:00-19:00 МСК)
-    - cron: '*/5 * * * 1-5'
-  workflow_dispatch:  # можно запустить вручную
+    - cron: "*/5 * * * 1-5"
+  workflow_dispatch: # можно запустить вручную
 
 env:
   SCALPING_STRATEGY: medium_term
@@ -30,8 +30,8 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: "3.11"
+          cache: "pip"
 
       - name: Install dependencies
         run: |

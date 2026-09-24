@@ -47,6 +47,10 @@ class Position:
     exchange_sl_order_id: Optional[str] = None
     exchange_sl_price: Optional[float] = None
 
+    # Биржевой TP-ордер (для отображения в терминале)
+    exchange_tp_order_id: Optional[str] = None
+    exchange_tp_price: Optional[float] = None
+
     def update_pnl(self, current_price: float):
         """Обновить PnL позиции."""
         if self.direction == "BUY":
@@ -287,6 +291,20 @@ class ScalpingTrader:
                                 flush=True
                             )
 
+                        restored_tp_id = saved_rec.get("exchange_tp_order_id")
+                        restored_tp_px = saved_rec.get("exchange_tp_price")
+                        if restored_tp_id:
+                            position.exchange_tp_order_id = restored_tp_id
+                            try:
+                                position.exchange_tp_price = float(restored_tp_px) if restored_tp_px else None
+                            except (TypeError, ValueError):
+                                position.exchange_tp_price = None
+                            print(
+                                f"[TRADER] {ticker}: восстановлен биржевой TP {restored_tp_id} "
+                                f"@ {position.exchange_tp_price}",
+                                flush=True
+                            )
+
                         self.positions.append(position)
                         positions_found.append(ticker)
                         print(f"[TRADER] Активная позиция: {position.ticker} @ {position.entry_price:.2f}₽", flush=True)
@@ -490,6 +508,7 @@ class ScalpingTrader:
         # и те, чей стоп биржа отклонила при открытии.
         try:
             self._ensure_exchange_sl()
+            self._ensure_exchange_tp()
         except Exception as e:
             logger.warning(f"⚠️ Проверка биржевых SL не выполнена: {e}")
 
@@ -751,8 +770,7 @@ class ScalpingTrader:
             )
 
             # Все стоп-заявки биржи, подходящие под эту позицию.
-            # ВАЖНО: GetStopOrders возвращает количество в поле lotsRequested (строка),
-            # а не quantity — иначе сопоставление не срабатывает и плодятся дубликаты.
+            # Для SL: цена стопа должна быть НИЖЕ цены входа (страховка от падения)
             matches = []
             for so in existing_stops:
                 if not isinstance(so, dict):
@@ -769,6 +787,17 @@ class ScalpingTrader:
                     continue
                 if so.get("status") not in (None, "STOP_ORDER_STATUS_ACTIVE"):
                     continue
+                # Проверяем цену: для SL она должна быть НИЖЕ entry (стоп от падения)
+                sp = so.get("stopPrice") or {}
+                try:
+                    stop_price_val = float(sp.get("units", 0) or 0) + float(sp.get("nano", 0) or 0) / 1e9
+                except (TypeError, ValueError):
+                    stop_price_val = 0
+                if stop_price_val > 0:
+                    if position.direction == "BUY" and stop_price_val >= position.entry_price:
+                        continue  # Это ТР, не SL
+                    if position.direction == "SELL" and stop_price_val <= position.entry_price:
+                        continue  # Это ТР (для SELL позиции)
                 matches.append(so)
 
             tracked_id = getattr(position, "exchange_sl_order_id", None)
@@ -870,6 +899,169 @@ class ScalpingTrader:
                     f"❌ {position.ticker}: позиция x{position.quantity} БЕЗ биржевой страховки! "
                     f"Следующая попытка через {int(self._sl_retry_interval / 60)} мин. "
                     f"Работает только программный TP/SL (бот должен быть запущен)."
+                )
+
+        if changed:
+            save_positions(self.positions)
+
+    def _ensure_exchange_tp(self) -> None:
+        """
+        Гарантирует что каждая открытая позиция имеет биржевой TP-ордер.
+        TP отображается в терминале Т-Инвестиций как стоп-заявка «Тейк-профит».
+        """
+        if not self.positions:
+            return
+
+        if not hasattr(self, "_tp_retry_after"):
+            self._tp_retry_after: Dict[str, float] = {}
+        if not hasattr(self, "_tp_retry_interval"):
+            self._tp_retry_interval = 900.0
+
+        existing_stops = []
+        try:
+            existing_stops = self.client.get_stop_orders() or []
+        except Exception as e:
+            logger.debug(f"Не удалось получить список стоп-заявок для TP: {e}")
+
+        changed = False
+        now_ts = datetime.now().timestamp()
+
+        for position in self.positions:
+            if position.quantity <= 0:
+                continue
+
+            # Для TP направление то же, что и для SL (SELL для BUY-позиций)
+            want_dir = (
+                "STOP_ORDER_DIRECTION_SELL" if position.direction == "BUY"
+                else "STOP_ORDER_DIRECTION_BUY"
+            )
+
+            # Ищем TP-заявки среди существующих стопов.
+            # Для TP: цена стопа должна быть ВЫШЕ цены входа (фиксация прибыли)
+            matches = []
+            for so in existing_stops:
+                if not isinstance(so, dict):
+                    continue
+                if so.get("figi") != position.figi:
+                    continue
+                if so.get("direction") != want_dir:
+                    continue
+                try:
+                    so_lots = int(so.get("lotsRequested") or so.get("quantity") or 0)
+                except (TypeError, ValueError):
+                    so_lots = 0
+                if so_lots != int(position.quantity):
+                    continue
+                if so.get("status") not in (None, "STOP_ORDER_STATUS_ACTIVE"):
+                    continue
+                # Проверяем цену: для TP она должна быть ВЫШЕ entry (фиксация прибыли)
+                sp = so.get("stopPrice") or {}
+                try:
+                    stop_price_val = float(sp.get("units", 0) or 0) + float(sp.get("nano", 0) or 0) / 1e9
+                except (TypeError, ValueError):
+                    stop_price_val = 0
+                if stop_price_val > 0:
+                    if position.direction == "BUY" and stop_price_val <= position.entry_price:
+                        continue  # Это SL, не TP
+                    if position.direction == "SELL" and stop_price_val >= position.entry_price:
+                        continue  # Это SL (для SELL позиции)
+                matches.append(so)
+
+            tracked_id = getattr(position, "exchange_tp_order_id", None)
+            tracked_alive = bool(tracked_id) and any(
+                m.get("stopOrderId") == tracked_id for m in matches
+            )
+
+            # 1) Чистим дубликаты TP
+            if len(matches) > 1:
+                keep_id = tracked_id if tracked_alive else matches[0].get("stopOrderId")
+                for extra in matches:
+                    extra_id = extra.get("stopOrderId")
+                    if not extra_id or extra_id == keep_id:
+                        continue
+                    try:
+                        self.client.cancel_stop_order(extra_id)
+                        logger.warning(f"🧹 {position.ticker}: снят дубль биржевого TP {extra_id}")
+                        changed = True
+                    except Exception as e:
+                        logger.warning(
+                            f"⚠️ {position.ticker}: не удалось снять дубль TP {extra_id}: {e}"
+                        )
+                matches = [m for m in matches if m.get("stopOrderId") == keep_id]
+
+            # 2) Наш TP жив — синхронизируем цену
+            if tracked_id and tracked_alive:
+                if matches:
+                    sp = matches[0].get("stopPrice") or {}
+                    try:
+                        position.exchange_tp_price = (
+                            float(sp.get("units", 0) or 0) + float(sp.get("nano", 0) or 0) / 1e9
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                continue
+
+            # 3) Отслеживаемый TP исчез (исполнился/снят)
+            if tracked_id and not tracked_alive:
+                logger.warning(
+                    f"⚠️ {position.ticker}: отслеживаемый TP {tracked_id} больше не на бирже"
+                )
+                position.exchange_tp_order_id = None
+                position.exchange_tp_price = None
+                changed = True
+
+            # 4) Есть TP без нашего учёта — «усыновляем»
+            if matches:
+                adopted = matches[0].get("stopOrderId")
+                sp = matches[0].get("stopPrice") or {}
+                try:
+                    position.exchange_tp_price = (
+                        float(sp.get("units", 0) or 0) + float(sp.get("nano", 0) or 0) / 1e9
+                    )
+                except (TypeError, ValueError):
+                    position.exchange_tp_price = None
+                position.exchange_tp_order_id = adopted
+                self._tp_retry_after.pop(position.figi, None)
+                logger.info(
+                    f"🎯 {position.ticker}: найден существующий биржевой TP {adopted} "
+                    f"x{position.quantity} @ {position.exchange_tp_price}"
+                )
+                changed = True
+                continue
+
+            # 5) Backoff
+            if now_ts < self._tp_retry_after.get(position.figi, 0.0):
+                continue
+
+            tp_direction = "SELL" if position.direction == "BUY" else "BUY"
+            tp_price = position.entry_price * (1 + self.settings.take_profit_percent / 100)
+
+            stop_id, stop_price, filled = self._place_exchange_tp_with_retry(
+                figi=position.figi,
+                quantity=int(position.quantity),
+                entry_price=position.entry_price,
+                direction=tp_direction,
+                tp_percent=self.settings.take_profit_percent,
+            )
+            if filled:
+                logger.warning(
+                    f"⚠️ {position.ticker}: биржевой TP исполнился сразу!"
+                )
+                continue
+            if stop_id:
+                position.exchange_tp_order_id = stop_id
+                position.exchange_tp_price = stop_price
+                self._tp_retry_after.pop(position.figi, None)
+                logger.info(
+                    f"🎯 {position.ticker}: биржевой TP дозаказан {stop_id} "
+                    f"x{position.quantity} @ {stop_price:.4f}₽"
+                )
+                changed = True
+            else:
+                self._tp_retry_after[position.figi] = now_ts + self._tp_retry_interval
+                logger.error(
+                    f"❌ {position.ticker}: не удалось разместить биржевой TP! "
+                    f"Следующая попытка через {int(self._tp_retry_interval / 60)} мин."
                 )
 
         if changed:
@@ -1005,6 +1197,99 @@ class ScalpingTrader:
         )
         return None, None, False
 
+    def _place_exchange_tp_with_retry(
+        self,
+        figi: str,
+        quantity: int,
+        entry_price: float,
+        direction: str,
+        tp_percent: float,
+    ):
+        """
+        Размещает биржевой TAKE-PROFIT с ретраями.
+
+        Возвращает (stop_order_id, stop_price, filled_now).
+        Биржа может отклонить TP слишком близко к рынку (30099) —
+        отодвигаем дистанцию и пробуем снова.
+        """
+        if entry_price <= 0 or quantity <= 0:
+            return None, None, False
+
+        market_price = entry_price
+        try:
+            ob = self.client.get_orderbook(figi, 1)
+            side = "bids" if direction == "SELL" else "asks"
+            quotes = ob.get(side) if isinstance(ob, dict) else None
+            if quotes:
+                px = quotes[0].get("price", {})
+                candidate = float(px.get("units", 0) or 0) + float(px.get("nano", 0) or 0) / 1e9
+                if candidate > 0:
+                    market_price = candidate
+        except Exception as e:
+            logger.debug(f"Нет стакана для {figi}, считаю TP от цены входа: {e}")
+
+        increment = self._get_min_price_increment(figi)
+
+        # Дистанции для TP: штатный -> шире
+        attempts_pct = []
+        for pct in (tp_percent, max(tp_percent * 1.2, 1.5), 2.0, 3.0, 5.0):
+            if pct > 0 and pct not in attempts_pct:
+                attempts_pct.append(pct)
+
+        for idx, pct in enumerate(attempts_pct):
+            sign = 1 if direction == "SELL" else -1
+            raw_price = market_price * (1 + sign * pct / 100)
+            tp_price = self._round_to_increment(raw_price, increment)
+            if tp_price <= 0:
+                continue
+
+            try:
+                result = self.client.place_stop_loss_order(
+                    figi=figi,
+                    quantity=quantity,
+                    stop_price=tp_price,
+                    direction=direction,
+                    stop_order_type="STOP_ORDER_TYPE_TAKE_PROFIT",
+                )
+            except Exception as e:
+                logger.error(f"❌ Исключение при размещении биржевого TP {figi}: {e}")
+                continue
+
+            if not isinstance(result, dict) or not result:
+                logger.warning(f"⚠️ Пустой ответ API при размещении TP {figi}")
+                continue
+
+            status = str(result.get("executionReportStatus", ""))
+            stop_id = result.get("stopOrderId") or result.get("orderId")
+
+            if status == "EXECUTION_REPORT_STATUS_FILL":
+                return stop_id, tp_price, True
+
+            if stop_id:
+                if idx > 0:
+                    logger.info(
+                        f"🎯 Биржевой TP размещён с {idx + 1}-й попытки на {pct:.2f}% "
+                        f"(штатный {tp_percent:.2f}% биржа отклонила)"
+                    )
+                return stop_id, tp_price, False
+
+            msg = f"{result.get('message', '')} {result.get('description', '')}".lower()
+            if "30099" in msg or "outside the limits" in msg:
+                logger.warning(
+                    f"⚠️ Биржа отклонила TP {tp_price:.4f}₽ ({pct:.2f}%) для {figi}, "
+                    f"пробую дальше: {str(result.get('message', '')).strip()}"
+                )
+                continue
+
+            logger.warning(f"⚠️ Биржевой TP не размещён для {figi}: {result}")
+            return None, None, False
+
+        logger.error(
+            f"❌ Не удалось разместить биржевой TP для {figi} "
+            f"после {len(attempts_pct)} попыток"
+        )
+        return None, None, False
+
     def _cancel_exchange_sl(self, position) -> None:
         """
         Снимает биржевой стоп-лосс позиции.
@@ -1022,6 +1307,24 @@ class ScalpingTrader:
             position.exchange_sl_price = None
         except Exception as e:
             logger.warning(f"⚠️ Не удалось снять биржевой SL для {position.ticker}: {e}")
+
+    def _cancel_exchange_tp(self, position) -> None:
+        """
+        Снимает биржевой тейк-профит позиции.
+
+        Обязательно перед программным закрытием: иначе после продажи
+        бумаг TP остаётся на бирже и может продать их повторно.
+        """
+        stop_id = getattr(position, "exchange_tp_order_id", None)
+        if not stop_id:
+            return
+        try:
+            self.client.cancel_stop_order(stop_id)
+            logger.info(f"🗑️ Биржевой TP снят для {position.ticker}: {stop_id}")
+            position.exchange_tp_order_id = None
+            position.exchange_tp_price = None
+        except Exception as e:
+            logger.warning(f"⚠️ Не удалось снять биржевой TP для {position.ticker}: {e}")
 
     async def open_position(
         self,
@@ -1159,10 +1462,37 @@ class ScalpingTrader:
                     except Exception:
                         pass
 
+            # Биржевой TP — для отображения в терминале
+            tp_val = tp_percent if tp_percent else self.settings.take_profit_percent
+            if sl_order_id:  # Только если SL размещён (позиция жива)
+                tp_direction = "SELL" if signal.signal_type.value == "BUY" else "BUY"
+                tp_order_id, tp_price_placed, tp_filled = self._place_exchange_tp_with_retry(
+                    figi=signal.figi,
+                    quantity=quantity,
+                    entry_price=signal.price,
+                    direction=tp_direction,
+                    tp_percent=tp_val,
+                )
+                if tp_filled:
+                    logger.warning(f"⚠️ Биржевой TP сразу исполнился, позиция {signal.ticker} закрыта по TP")
+                    if new_position in self.positions:
+                        self.positions.remove(new_position)
+                    save_positions(self.positions)
+                    return None
+                if tp_order_id:
+                    new_position.exchange_tp_order_id = tp_order_id
+                    new_position.exchange_tp_price = tp_price_placed
+                    logger.info(
+                        f"🎯 Биржевой TP размещён: stopOrderId={tp_order_id}, "
+                        f"price={tp_price_placed:.4f}₽ ({signal.ticker} x{quantity})"
+                    )
+                else:
+                    logger.warning(f"⚠️ {signal.ticker}: биржевой TP не размещён")
+
             # НЕ выставляем лимитку при открытии - закрытие только через мониторинг
             # (чтобы избежать двойной комиссии)
-            tp_val = tp_percent if tp_percent else self.settings.take_profit_percent
-            tp_price = signal.price * (1 + tp_val / 100) if signal.signal_type.value == "BUY" else signal.price * (1 - tp_val / 100)
+            tp_val_for_msg = tp_percent if tp_percent else self.settings.take_profit_percent
+            tp_price = signal.price * (1 + tp_val_for_msg / 100) if signal.signal_type.value == "BUY" else signal.price * (1 - tp_val_for_msg / 100)
             
             message = (
                 f"✅ <b>Позиция открыта!</b>\n\n"
@@ -1386,9 +1716,10 @@ class ScalpingTrader:
         reason: str
     ) -> Optional[str]:
         """Завершить закрытие позиции."""
-        # СНАЧАЛА снимаем биржевой стоп-лосс: если продать бумаги и оставить стоп,
+        # СНАЧАЛА снимаем оба биржевых стоп-ордера: если продать бумаги и оставить стоп,
         # он сработает позже и продаст позиции, которых уже нет («сиротский» стоп).
         self._cancel_exchange_sl(position)
+        self._cancel_exchange_tp(position)
 
         position.close(current_price, reason)
         

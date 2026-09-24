@@ -24,7 +24,10 @@ def save_positions(positions: list) -> None:
                 # Биржевой SL должен переживать рестарт бота: иначе бот теряет учёт
                 # своих стопов и либо дублирует их, либо оставляет «сиротскими».
                 "exchange_sl_order_id": getattr(p, "exchange_sl_order_id", None),
-                "exchange_sl_price": getattr(p, "exchange_sl_price", None)
+                "exchange_sl_price": getattr(p, "exchange_sl_price", None),
+                # Биржевой TP — для отображения в терминале Т-Инвестиций
+                "exchange_tp_order_id": getattr(p, "exchange_tp_order_id", None),
+                "exchange_tp_price": getattr(p, "exchange_tp_price", None)
             }
             for p in positions
         ]

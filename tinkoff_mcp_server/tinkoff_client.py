@@ -199,14 +199,15 @@ class TinkoffClient:
         quantity: int,
         stop_price: float,
         direction: Optional[str] = None,
-        account_id: Optional[str] = None
+        account_id: Optional[str] = None,
+        stop_order_type: str = "STOP_ORDER_TYPE_STOP_LOSS",
     ) -> Dict[str, Any]:
         """
-        Place exchange stop-loss order.
+        Place exchange stop order (STOP_LOSS or TAKE_PROFIT).
 
         Этот ордер находится на бирже и сработает ДАЖЕ если бот не работает.
-        direction: None = auto-detect (для BUY позиции -> SELL SL, для SELL -> BUY SL).
-                  Можно указать явно 'BUY' или 'SELL'.
+        Для TP используйте stop_order_type="STOP_ORDER_TYPE_TAKE_PROFIT".
+        direction: None = auto-detect (для BUY позиции -> SELL, для SELL -> BUY).
 
         Использует StopOrdersService/PostStopOrder (не OrdersService/PostOrder).
         """
@@ -218,7 +219,6 @@ class TinkoffClient:
             for s in positions.get('securities', []):
                 if s.get('figi') == figi:
                     balance = int(s.get('balance', 0))
-                    # Если баланс > 0 - это LONG позиция, SL = SELL
                     if balance > 0:
                         direction = "SELL"
                     else:
@@ -231,7 +231,8 @@ class TinkoffClient:
         price_units = int(stop_price)
         price_nano = int((stop_price - price_units) * 1e9)
 
-        logger.info(f"EXCHANGE STOP-LOSS: figi={figi}, qty={quantity}, dir={direction}, stop_price={stop_price}")
+        order_type_label = "TAKE-PROFIT" if "TAKE_PROFIT" in stop_order_type else "STOP-LOSS"
+        logger.info(f"EXCHANGE {order_type_label}: figi={figi}, qty={quantity}, dir={direction}, price={stop_price}")
 
         return self._request(
             "tinkoff.public.invest.api.contract.v1.StopOrdersService/PostStopOrder",
@@ -242,7 +243,7 @@ class TinkoffClient:
                 "direction": api_direction,
                 "stopPrice": {"units": price_units, "nano": price_nano},
                 "expirationType": "STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL",
-                "stopOrderType": "STOP_ORDER_TYPE_STOP_LOSS",
+                "stopOrderType": stop_order_type,
             }
         )
 
